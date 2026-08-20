@@ -1156,7 +1156,7 @@ def setup(
             policy=policy if colocated_inference else None,
             processor=processor,
             weights_path=weights_path,
-            skip_weight_load=not colocated_inference,
+            skip_weight_load=False,
         )
         return mg, time.perf_counter() - t0
 
