@@ -900,7 +900,32 @@ class MegatronGenerationRefitMixin:
             dst_rank_offset=self.refit_dst_rank_offset,
         )
 
+        if not is_source:
+            self._nrlta_refill_mamba_decode_cache()
+
         return True
+
+    def _nrlta_refill_mamba_decode_cache(self) -> None:
+        """Probe: refresh the mamba decode cache that refit leaves stale.
+
+        MambaMixer decodes from a cached ``-exp(A_log)`` that only ``train(True)``
+        marks stale. It is filled during CUDA graph capture, before the first
+        refit, and never refreshed afterwards. The buffer is deliberately
+        allocated outside graph capture so its address stays valid, so an
+        in-place refill here is visible to an already captured graph.
+        """
+        chunks = self.model if isinstance(self.model, (list, tuple)) else [self.model]
+        refilled = 0
+        for chunk in chunks:
+            for module in chunk.modules():
+                cache = getattr(module, "_A_neg_exp_cache", None)
+                if cache is None:
+                    continue
+                with torch.no_grad():
+                    cache.copy_(-torch.exp(module.A_log.float()))
+                module._A_neg_exp_cache_stale = False
+                refilled += 1
+        print(f"[Rank {self.rank}] NRLTA refilled {refilled} mamba decode caches")
 
     def _onload_inference_model(self) -> None:
         """Restore the colocated inference weights to GPU before resharding / generation."""
