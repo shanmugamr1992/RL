@@ -59,7 +59,7 @@ uv run --no-sync python $PROJECT_ROOT/examples/run_grpo.py \
     policy.generation.colocated.enabled=false \
     ++policy.generation.colocated.resources.gpus_per_node=4 \
     ++policy.generation.colocated.resources.num_nodes=1 \
-    ++policy.generation.mcore_generation_config.transformer_impl=inference_optimized \
+    ++policy.generation.mcore_generation_config.transformer_impl=transformer_engine \
     ++policy.generation.mcore_generation_config.refit_backend=nccl \
     ++policy.generation.mcore_generation_config.enable_prefix_caching=true \
     ++policy.generation.mcore_generation_config.logging_step_interval=1 \
