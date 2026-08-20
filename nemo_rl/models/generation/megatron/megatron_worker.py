@@ -900,7 +900,57 @@ class MegatronGenerationRefitMixin:
             dst_rank_offset=self.refit_dst_rank_offset,
         )
 
+        if not is_source:
+            self._nrlta_dump_inference_tensors()
+
         return True
+
+    def _nrlta_dump_inference_tensors(self) -> None:
+        """Debug instrumentation: fingerprint the inference model after a refit.
+
+        Writes one JSON per rank naming every parameter, buffer and extra-state
+        entry with its dtype, shape and norm. Comparing a run that skipped the
+        checkpoint load against one that did not identifies exactly which
+        tensors refit leaves at their initialization values.
+        """
+        dump_dir = os.environ.get("NRLTA_DUMP_TENSORS")
+        if not dump_dir or getattr(self, "_nrlta_dumped", False):
+            return
+        self._nrlta_dumped = True
+
+        import json
+
+        def fingerprint(tensor):
+            try:
+                data = getattr(tensor, "data", tensor)
+                if not torch.is_tensor(data):
+                    return {"kind": type(tensor).__name__}
+                entry = {"dtype": str(data.dtype), "shape": list(data.shape)}
+                if data.is_floating_point():
+                    entry["norm"] = float(data.detach().float().norm())
+                    entry["nan"] = bool(data.detach().isnan().any())
+                else:
+                    entry["sum"] = float(data.detach().double().abs().sum())
+                return entry
+            except Exception as exc:  # instrumentation must never fail the run
+                return {"error": repr(exc)}
+
+        chunks = self.model if isinstance(self.model, (list, tuple)) else [self.model]
+        record: dict[str, dict] = {}
+        for index, chunk in enumerate(chunks):
+            for name, param in chunk.named_parameters():
+                record[f"chunk{index}.param.{name}"] = fingerprint(param)
+            for name, buf in chunk.named_buffers():
+                record[f"chunk{index}.buffer.{name}"] = fingerprint(buf)
+            for name, value in chunk.state_dict().items():
+                if name.endswith("_extra_state"):
+                    record[f"chunk{index}.extra.{name}"] = fingerprint(value)
+
+        os.makedirs(dump_dir, exist_ok=True)
+        path = os.path.join(dump_dir, f"rank{self.rank}.json")
+        with open(path, "w") as handle:
+            json.dump(record, handle, indent=1, sort_keys=True)
+        print(f"[Rank {self.rank}] NRLTA wrote {len(record)} tensor entries to {path}")
 
     def _onload_inference_model(self) -> None:
         """Restore the colocated inference weights to GPU before resharding / generation."""
